@@ -1,0 +1,13 @@
+[package]
+name = "socktainer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ctrlc = "3.4"
+
+[dev-dependencies]
+rstest = { version = "0.26", default-features = false }
+serde_json = "1"
+tempfile = "3"
+ureq = { version = "2", default-features = false, features = ["json"] }

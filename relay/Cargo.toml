@@ -1,0 +1,8 @@
+[package]
+name = "docker-relay"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "docker-relay"
+path = "src/main.rs"

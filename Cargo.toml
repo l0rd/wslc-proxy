@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["relay", "socktainer"]
+# The relay only builds for Linux, so a plain `cargo build` on the Windows
+# host builds socktainer alone. Build the relay with `-p docker-relay`.
+default-members = ["socktainer"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+strip = true
+lto = true
+panic = "abort"

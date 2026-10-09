@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The hosted Windows runners are x64, and so is the wslc session VM.
+  RELAY_TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt --target $env:RELAY_TARGET
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy -p docker-relay --target $env:RELAY_TARGET -- -D warnings
+
+      - name: Build relay
+        run: |
+          cargo build --release -p docker-relay --target $env:RELAY_TARGET
+          Copy-Item "target/$env:RELAY_TARGET/release/docker-relay" docker-relay
+
+      - name: Build socktainer
+        run: cargo build --release
+
+      - name: Proxy tests (fake wslc)
+        run: cargo test --release
+
+      - name: Update WSL
+        run: |
+          $env:WSL_UTF8 = "1"
+          wsl --update
+          wsl --version
+
+          # The update may add wslc to the machine PATH, which steps of an
+          # already-running job don't see.
+          $wslc = Get-Command wslc -ErrorAction SilentlyContinue
+          if (-not $wslc) {
+            $dir = Join-Path $env:ProgramFiles "WSL"
+            if (-not (Test-Path (Join-Path $dir "wslc.exe"))) {
+              throw "wslc not found on PATH or in $dir after 'wsl --update'"
+            }
+            Add-Content $env:GITHUB_PATH $dir
+            Write-Host "Added $dir to PATH"
+          } else {
+            Write-Host "wslc found at $($wslc.Source)"
+          }
+
+      - name: End-to-end tests (real wslc)
+        timeout-minutes: 20
+        run: cargo test --release --test e2e -- --ignored --nocapture
+
+      - name: Upload binaries
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: socktainer-windows-x64
+          path: |
+            target/release/socktainer.exe
+            docker-relay
+          if-no-files-found: warn
