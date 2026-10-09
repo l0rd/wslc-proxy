@@ -29,7 +29,7 @@ use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::process::{self, Command, Stdio};
+use std::process::{self, Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::thread;
 
@@ -97,7 +97,22 @@ fn serve() -> Result<(), String> {
     for conn in listener.incoming() {
         match conn {
             Ok(conn) => {
-                thread::spawn(move || handle_conn(conn));
+                // Start the relay here rather than in the handler thread, so
+                // that no wslc process is ever created while another
+                // connection is half set up. Windows children inherit every
+                // inheritable handle, and a relay holding a stray copy of
+                // some other connection's socket or pipe keeps it open after
+                // we close ours.
+                if let Err(err) = keep_from_children(&conn) {
+                    eprintln!("mark connection non-inheritable: {err}");
+                    continue;
+                }
+                match spawn_relay() {
+                    Ok(relay) => {
+                        thread::spawn(move || handle_conn(conn, relay));
+                    }
+                    Err(err) => eprintln!("start relay: {err}"),
+                }
             }
             Err(err) => return Err(format!("Accept failed: {err}")),
         }
@@ -177,31 +192,40 @@ impl Drop for ConnGuard {
     }
 }
 
-fn handle_conn(conn: TcpStream) {
+/// Accepted sockets are inheritable on Windows; make sure wslc never gets one.
+#[cfg(windows)]
+fn keep_from_children(conn: &TcpStream) -> io::Result<()> {
+    socket2::SockRef::from(conn).set_no_inherit(true)
+}
+
+/// Elsewhere the standard library already opens sockets close-on-exec.
+#[cfg(not(windows))]
+fn keep_from_children(_conn: &TcpStream) -> io::Result<()> {
+    Ok(())
+}
+
+fn spawn_relay() -> io::Result<Child> {
+    wslc()
+        .args(["system", "session", "run", RELAY_BIN_GUEST])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+}
+
+fn handle_conn(conn: TcpStream, mut child: Child) {
     let _guard = ConnGuard::new();
 
     let mut conn_reader = match conn.try_clone() {
         Ok(clone) => clone,
         Err(err) => {
             eprintln!("clone connection: {err}");
+            let _ = child.kill();
+            let _ = child.wait();
             return;
         }
     };
     let mut conn_writer = conn;
-
-    let mut child = match wslc()
-        .args(["system", "session", "run", RELAY_BIN_GUEST])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            eprintln!("start relay: {err}");
-            return;
-        }
-    };
 
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let mut stdout = child.stdout.take().expect("stdout is piped");

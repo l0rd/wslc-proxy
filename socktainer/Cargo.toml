@@ -6,6 +6,9 @@ edition.workspace = true
 [dependencies]
 ctrlc = "3.4"
 
+[target.'cfg(windows)'.dependencies]
+socket2 = { version = "0.6", features = ["all"] }
+
 [dev-dependencies]
 rstest = { version = "0.26", default-features = false }
 serde_json = "1"
