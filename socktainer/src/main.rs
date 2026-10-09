@@ -27,7 +27,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{self, Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -242,6 +242,9 @@ fn handle_conn(conn: TcpStream, mut child: Child) {
         if let Err(err) = pump(&mut stdout, &mut conn_writer) {
             eprintln!("relay → client: {err}");
         }
+        // Tell the client there is nothing more to read, instead of leaving
+        // that to whenever the last handle to the socket gets closed.
+        let _ = conn_writer.shutdown(Shutdown::Write);
     });
 
     let _ = upstream.join();
