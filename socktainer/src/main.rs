@@ -232,12 +232,16 @@ fn handle_conn(conn: TcpStream, mut child: Child) {
 
     // client → relay; dropping stdin at the end signals EOF to the relay.
     let upstream = thread::spawn(move || {
-        pump(&mut conn_reader, &mut stdin);
+        if let Err(err) = pump(&mut conn_reader, &mut stdin) {
+            eprintln!("client → relay: {err}");
+        }
     });
 
     // relay → client
     let downstream = thread::spawn(move || {
-        pump(&mut stdout, &mut conn_writer);
+        if let Err(err) = pump(&mut stdout, &mut conn_writer) {
+            eprintln!("relay → client: {err}");
+        }
     });
 
     let _ = upstream.join();
@@ -278,18 +282,14 @@ fn run_quiet(args: &[&str]) {
 /// Deliberately not io::copy: on Linux that splices socket data straight into
 /// a pipe, and a blocked splice keeps the pipe locked, so the process at the
 /// other end can't read what has already arrived until more data shows up.
-fn pump(mut reader: impl Read, mut writer: impl Write) {
+fn pump(mut reader: impl Read, mut writer: impl Write) -> io::Result<()> {
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         match reader.read(&mut buf) {
-            Ok(0) => return,
-            Ok(n) => {
-                if writer.write_all(&buf[..n]).is_err() {
-                    return;
-                }
-            }
+            Ok(0) => return Ok(()),
+            Ok(n) => writer.write_all(&buf[..n])?,
             Err(err) if err.kind() == ErrorKind::Interrupted => {}
-            Err(_) => return,
+            Err(err) => return Err(err),
         }
     }
 }

@@ -43,13 +43,17 @@ fn relay(conn: UnixStream) -> io::Result<()> {
 
     // stdin → docker.sock
     let upstream = thread::spawn(move || {
-        pump(&mut stdin, &mut sock_writer);
+        if let Err(err) = pump(&mut stdin, &mut sock_writer) {
+            eprintln!("relay: stdin → docker.sock: {err}");
+        }
         let _ = sock_writer.shutdown(Shutdown::Write);
     });
 
     // docker.sock → stdout
     let downstream = thread::spawn(move || {
-        pump(&mut sock_reader, &mut stdout);
+        if let Err(err) = pump(&mut sock_reader, &mut stdout) {
+            eprintln!("relay: docker.sock → stdout: {err}");
+        }
     });
 
     let _ = upstream.join();
@@ -62,18 +66,14 @@ fn relay(conn: UnixStream) -> io::Result<()> {
 /// Deliberately not io::copy: on Linux that splices socket data straight into
 /// a pipe, and a blocked splice keeps the pipe locked, so the process at the
 /// other end can't read what has already arrived until more data shows up.
-fn pump(mut reader: impl Read, mut writer: impl Write) {
+fn pump(mut reader: impl Read, mut writer: impl Write) -> io::Result<()> {
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         match reader.read(&mut buf) {
-            Ok(0) => return,
-            Ok(n) => {
-                if writer.write_all(&buf[..n]).is_err() {
-                    return;
-                }
-            }
+            Ok(0) => return Ok(()),
+            Ok(n) => writer.write_all(&buf[..n])?,
             Err(err) if err.kind() == ErrorKind::Interrupted => {}
-            Err(_) => return,
+            Err(err) => return Err(err),
         }
     }
 }

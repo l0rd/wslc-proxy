@@ -116,9 +116,26 @@ impl Proxy {
                 writer.shutdown(Shutdown::Write).expect("half-close");
             });
             let mut received = Vec::new();
-            conn.read_to_end(&mut received).expect("read reply");
+            if let Err(err) = conn.read_to_end(&mut received) {
+                panic!(
+                    "read reply: {err} (after {} of {} bytes)",
+                    received.len(),
+                    payload.len()
+                );
+            }
             received
         })
+    }
+}
+
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            eprintln!(
+                "--- wslc calls ---\n{}",
+                self.sandbox.wslc_calls().join("\n")
+            );
+        }
     }
 }
 
